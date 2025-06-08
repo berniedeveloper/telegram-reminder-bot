@@ -1,8 +1,8 @@
 services:
-  - type: worker
+  - type: web
     name: telegram-media-bot
     env: python
-    region: oregon  # or change to your closest region
+    region: oregon
     plan: free
     branch: main
     buildCommand: ""
