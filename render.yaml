@@ -1,0 +1,13 @@
+services:
+  - type: worker
+    name: telegram-media-bot
+    env: python
+    region: oregon  # or change to your closest region
+    plan: free
+    branch: main
+    buildCommand: ""
+    startCommand: python bot.py
+    autoDeploy: true
+    envVars:
+      - key: BOT_TOKEN
+        #value: YOUR_BOT_TOKEN_HERE  # Or leave this blank to set it manually via the dashboard
