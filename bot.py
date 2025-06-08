@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -112,7 +113,14 @@ def main():
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, handle_channel_post))
 
     print("✅ Bot is running...")
-    app.run_polling()
+
+    while True:
+        try:
+            app.run_polling()
+        except Exception as e:
+            print(f"⚠️ Bot crashed with error: {e}")
+            print("⏳ Restarting bot in 5 seconds...")
+            time.sleep(5)
 
 if __name__ == '__main__':
     main()
