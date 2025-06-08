@@ -8,6 +8,7 @@ services:
     buildCommand: ""
     startCommand: python bot.py
     autoDeploy: true
-    envVars:
-      - key: BOT_TOKEN
-        #value: YOUR_BOT_TOKEN_HERE  # Or leave this blank to set it manually via the dashboard
+   envVars:
+  - key: BOT_TOKEN
+    sync: false
+
