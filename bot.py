@@ -1,9 +1,10 @@
 import os
 import json
 import time
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    CallbackQueryHandler, filters, ContextTypes
 )
 
 DATA_FILE = 'media_data.json'
@@ -15,20 +16,41 @@ try:
 except FileNotFoundError:
     media_data = []
 
+# /start command with menu
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [InlineKeyboardButton("📷 Send Media", callback_data='send')],
+        [InlineKeyboardButton("🏷️ Tag Media", callback_data='tag')],
+        [InlineKeyboardButton("📃 List Media", callback_data='list')]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
     await update.message.reply_text(
-        "Hello! Send me photos, videos, or documents and I will save them.\n"
-        "Use /tag <index> <tag1> [tag2 ...] to tag a saved media.\n"
-        "Use /list to see recent saved media."
+        "Hello! Please choose an option from the menu below:",
+        reply_markup=reply_markup
     )
 
+# Handle button menu clicks
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == 'send':
+        await query.edit_message_text("📥 Please send a photo, video, or document now.")
+    elif query.data == 'tag':
+        await query.edit_message_text("🏷️ Use the command /tag <index> <tag1> [tag2 ...]")
+    elif query.data == 'list':
+        await query.edit_message_text("📃 Listing media...")
+        await list_media(query, context)
+
+# Handle received media
 async def save_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     file_id = None
     media_type = None
 
     if msg.photo:
-        file_id = msg.photo[-1].file_id  # highest quality photo
+        file_id = msg.photo[-1].file_id
         media_type = "photo"
     elif msg.video:
         file_id = msg.video.file_id
@@ -51,6 +73,7 @@ async def save_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("Unsupported media type. Please send photos, videos, or documents.")
 
+# /tag command
 async def tag_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 2:
@@ -58,13 +81,13 @@ async def tag_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        idx = int(args[0]) - 1  # zero-based index
+        idx = int(args[0]) - 1
         if idx < 0 or idx >= len(media_data):
             await update.message.reply_text("Invalid media index.")
             return
         new_tags = args[1:]
         media_data[idx]["tags"].extend(new_tags)
-        media_data[idx]["tags"] = list(set(media_data[idx]["tags"]))  # unique tags
+        media_data[idx]["tags"] = list(set(media_data[idx]["tags"]))
 
         with open(DATA_FILE, 'w') as f:
             json.dump(media_data, f, indent=2)
@@ -73,9 +96,10 @@ async def tag_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError:
         await update.message.reply_text("The media index must be a number.")
 
+# /list command or called from button
 async def list_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not media_data:
-        await update.message.reply_text("No media saved yet.")
+        await context.bot.send_message(chat_id=update.effective_chat.id, text="No media saved yet.")
         return
 
     text = "Last 10 saved media:\n"
@@ -85,8 +109,9 @@ async def list_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption_preview = (item['caption'][:27] + '...') if len(item['caption']) > 30 else item['caption']
         text += f"{i}. Type: {item['media_type'].title()}, Tags: {tags}, Caption: {caption_preview}\n"
 
-    await update.message.reply_text(text)
+    await context.bot.send_message(chat_id=update.effective_chat.id, text=text)
 
+# For channel posts
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.channel_post
     if message.photo:
@@ -107,9 +132,10 @@ def main():
     app = ApplicationBuilder().token(bot_token).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, save_media))
+    app.add_handler(CallbackQueryHandler(button_handler))  # Menu handler
     app.add_handler(CommandHandler("tag", tag_media))
     app.add_handler(CommandHandler("list", list_media))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, save_media))
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, handle_channel_post))
 
     print("✅ Bot is running...")
