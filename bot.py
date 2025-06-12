@@ -1,45 +1,66 @@
 import os
 import json
 import time
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+    ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 )
 
-# Define the file path for storing media data
 DATA_FILE = 'media_data.json'
 
-# Load existing media data or initialize an empty list
+# Load or initialize media data
 try:
-    with open(DATA_FILE, 'r') as file:
-        media_data = json.load(file)
+    with open(DATA_FILE, 'r') as f:
+        media_data = json.load(f)
 except FileNotFoundError:
     media_data = []
 
-# Define the start command with a custom keyboard menu
+# --- Helper Functions ---
+def save_data():
+    with open(DATA_FILE, 'w') as f:
+        json.dump(media_data, f, indent=2)
+
+def count_media_by_type():
+    return {
+        'photo': sum(1 for m in media_data if m['media_type'] == 'photo'),
+        'video': sum(1 for m in media_data if m['media_type'] == 'video'),
+        'document': sum(1 for m in media_data if m['media_type'] == 'document')
+    }
+
+# --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
-        ["\U0001F4C4 List Media", "\U0001F4DD Tag Media"],
-        ["\U0001F4E4 Send Media"]
+        [InlineKeyboardButton("📄 List Media", callback_data='list')],
+        [InlineKeyboardButton("🔍 Search by Tag", callback_data='search')],
+        [InlineKeyboardButton("📊 Stats", callback_data='stats')]
     ]
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-    welcome_message = (
-        "\U0001F44B Welcome to the Media Bot!\n"
-        "Use the buttons below or the corresponding slash commands:\n"
-        "- /list: View recent saved media\n"
-        "- /tag <index> <tag1> [tag2...]: Tag media files\n"
-        "- /start: Redisplay this menu"
+    await update.message.reply_text(
+        "📥 Welcome! Use the buttons below or commands.\n\n"
+        "/tag <index> <tags> — Tag media\n"
+        "/delete <index> — Delete media",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    await update.message.reply_text(welcome_message, reply_markup=reply_markup)
 
-# Handle incoming media files and save their metadata
+async def list_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not media_data:
+        await update.message.reply_text("No media saved yet.")
+        return
+
+    text = "📄 Last 10 saved media:\n"
+    start_index = max(len(media_data) - 10, 0)
+    for i, item in enumerate(media_data[start_index:], start=start_index + 1):
+        tags = ', '.join(item['tags']) if item['tags'] else 'None'
+        caption = item['caption']
+        if len(caption) > 30:
+            caption = caption[:27] + '...'
+        text += f"{i}. {item['media_type'].title()} | Tags: {tags} | {caption}\n"
+    await update.message.reply_text(text)
+
 async def save_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     file_id = None
     media_type = None
 
-    # Identify the type of media and extract its file_id
     if msg.photo:
         file_id = msg.photo[-1].file_id
         media_type = "photo"
@@ -51,111 +72,122 @@ async def save_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
         media_type = "document"
 
     if file_id and media_type:
-        media_item = {
+        media_data.append({
             "file_id": file_id,
             "caption": msg.caption or "",
             "media_type": media_type,
             "tags": []
-        }
-        media_data.append(media_item)
-
-        # Persist data to file
-        with open(DATA_FILE, 'w') as file:
-            json.dump(media_data, file, indent=2)
-
-        await update.message.reply_text(f"\u2705 {media_type.title()} saved successfully as media #{len(media_data)}.")
+        })
+        save_data()
+        await update.message.reply_text(f"{media_type.title()} saved! Media #{len(media_data)}.")
     else:
-        await update.message.reply_text("\u274C Unsupported media type. Please send a photo, video, or document.")
+        await update.message.reply_text("Unsupported media. Send a photo, video, or document.")
 
-# Command handler to tag media items by index
 async def tag_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
     if len(args) < 2:
-        await update.message.reply_text("\u2139 Usage: /tag <index> <tag1> [tag2 ...]")
+        await update.message.reply_text("Usage: /tag <index> <tag1> [tag2 ...]")
         return
 
     try:
-        index = int(args[0]) - 1
-        if index < 0 or index >= len(media_data):
-            await update.message.reply_text("\u26A0 Invalid media index.")
+        idx = int(args[0]) - 1
+        if idx < 0 or idx >= len(media_data):
+            await update.message.reply_text("Invalid index.")
             return
-
         new_tags = args[1:]
-        media_data[index]['tags'].extend(new_tags)
-        media_data[index]['tags'] = list(set(media_data[index]['tags']))  # Ensure uniqueness
-
-        with open(DATA_FILE, 'w') as file:
-            json.dump(media_data, file, indent=2)
-
-        await update.message.reply_text(f"\u2714 Tags added to media #{index + 1}: {', '.join(new_tags)}")
+        media_data[idx]["tags"].extend(new_tags)
+        media_data[idx]["tags"] = list(set(media_data[idx]["tags"]))
+        save_data()
+        await update.message.reply_text(f"Tags added to media #{idx + 1}: {', '.join(new_tags)}")
     except ValueError:
-        await update.message.reply_text("\u274C Invalid index. Please provide a numeric value.")
+        await update.message.reply_text("Media index must be a number.")
 
-# Display the list of recently saved media files
-async def list_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not media_data:
-        await update.message.reply_text("\u2139 No media saved yet.")
+async def delete_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("Usage: /delete <index>")
         return
 
-    response = "\U0001F4CB Last 10 Saved Media:\n"
-    start_index = max(len(media_data) - 10, 0)
-    for i, item in enumerate(media_data[start_index:], start=start_index + 1):
-        tags = ', '.join(item['tags']) if item['tags'] else 'None'
-        caption_preview = (item['caption'][:27] + '...') if len(item['caption']) > 30 else item['caption']
-        response += f"{i}. Type: {item['media_type'].title()}, Tags: {tags}, Caption: {caption_preview}\n"
+    try:
+        idx = int(args[0]) - 1
+        if idx < 0 or idx >= len(media_data):
+            await update.message.reply_text("Invalid index.")
+            return
+        deleted = media_data.pop(idx)
+        save_data()
+        await update.message.reply_text(f"Deleted media #{idx + 1}: {deleted['media_type'].title()}")
+    except ValueError:
+        await update.message.reply_text("Media index must be a number.")
 
-    await update.message.reply_text(response)
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    counts = count_media_by_type()
+    total = len(media_data)
+    tag_count = sum(len(m['tags']) for m in media_data)
+    await update.message.reply_text(
+        f"📊 Media Stats:\n"
+        f"- Total Media: {total}\n"
+        f"- Photos: {counts['photo']}\n"
+        f"- Videos: {counts['video']}\n"
+        f"- Documents: {counts['document']}\n"
+        f"- Total Tags Used: {tag_count}"
+    )
 
-# Handle channel posts (optional, for broadcasted content)
-async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.channel_post
-    if message.photo:
-        await message.reply_text("\U0001F4F7 Photo received in channel!")
-    elif message.video:
-        await message.reply_text("\U0001F4FD Video received in channel!")
-    elif message.document:
-        await message.reply_text("\U0001F4C4 Document received in channel!")
-    else:
-        await message.reply_text("\U0001F4DD Non-media message received in channel.")
+async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /search <tag>")
+        return
 
-# Respond to menu selections from the custom keyboard
-async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.strip()
+    tag = args[0].lower()
+    results = [m for m in media_data if tag in [t.lower() for t in m['tags']]]
+    if not results:
+        await update.message.reply_text(f"No media found with tag '{tag}'.")
+        return
 
-    if text == "\U0001F4C4 List Media":
-        await list_media(update, context)
-    elif text == "\U0001F4DD Tag Media":
-        await update.message.reply_text("\u2139 To tag media, use the command:\n/tag <index> <tag1> [tag2...]")
-    elif text == "\U0001F4E4 Send Media":
-        await update.message.reply_text("\u2139 Please send a photo, video, or document now.")
-    else:
-        await update.message.reply_text("\u2753 Unrecognized option. Use the menu or /start to begin.")
+    text = f"🔍 Media with tag '{tag}':\n"
+    for i, item in enumerate(results, start=1):
+        caption = item['caption']
+        if len(caption) > 30:
+            caption = caption[:27] + '...'
+        text += f"{i}. {item['media_type'].title()} | {caption}\n"
+    await update.message.reply_text(text)
 
-# Main function to launch the bot
+# --- Inline Menu Handler ---
+async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "list":
+        await list_media(query, context)
+    elif query.data == "search":
+        await query.edit_message_text("Use /search <tag> to find media.")
+    elif query.data == "stats":
+        await stats(query, context)
+
+# --- Bot Setup ---
 def main():
-    bot_token = os.getenv("BOT_TOKEN")
-    if not bot_token:
-        print("\u274C Error: BOT_TOKEN environment variable is not set.")
+    token = os.getenv("BOT_TOKEN")
+    if not token:
+        print("❌ BOT_TOKEN is missing!")
         return
 
-    app = ApplicationBuilder().token(bot_token).build()
+    app = ApplicationBuilder().token(token).build()
 
-    # Register handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tag", tag_media))
+    app.add_handler(CommandHandler("delete", delete_media))
     app.add_handler(CommandHandler("list", list_media))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler))
+    app.add_handler(CommandHandler("search", search))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CallbackQueryHandler(handle_menu))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, save_media))
-    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, handle_channel_post))
 
-    print("\u2705 Bot is up and running...")
-
+    print("✅ Bot is running...")
     while True:
         try:
             app.run_polling()
-        except Exception as error:
-            print(f"\u26A0 Bot encountered an error: {error}")
-            print("\u23F3 Restarting bot in 5 seconds...")
+        except Exception as e:
+            print(f"⚠️ Bot crashed: {e}")
             time.sleep(5)
 
 if __name__ == '__main__':
